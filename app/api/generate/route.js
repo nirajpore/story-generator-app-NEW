@@ -1,134 +1,437 @@
-export async function POST(request) {
+import { computeStoryTargets, splitStoryIntoPages, validateStoryLocally, countWords } from '@/lib/story/pipeline';
+
+const GEMINI_MODEL = 'gemini-2.5-flash';
+const MAX_STORY_ATTEMPTS = 3;
+
+function jsonResponse(payload, status = 200) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function extractText(responseJson) {
+  return responseJson?.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('\n').trim() || '';
+}
+
+function cleanJsonBlock(text = '') {
+  return text
+    .replace(/^```json/i, '')
+    .replace(/^```/i, '')
+    .replace(/```$/i, '')
+    .trim();
+}
+
+async function callGemini({ apiKey, prompt, maxOutputTokens = 4096, enableSearch = false, responseMimeType }) {
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.45,
+      maxOutputTokens,
+      ...(responseMimeType ? { responseMimeType } : {}),
+    },
+  };
+
+  if (enableSearch) {
+    payload.tools = [{ google_search: {} }];
+  }
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }
+  );
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Gemini request failed (${response.status}): ${body}`);
+  }
+
+  return response.json();
+}
+
+async function researchTheme({ apiKey, theme, setting }) {
+  const prompt = `Research the following children's character/show/theme:
+${theme}
+${setting ? `Preferred setting context: ${setting}` : ''}
+
+Find reliable publicly available information that would help create an original children's story.
+Return strict JSON with fields:
+{
+  "theme": "...",
+  "identity": "...",
+  "personality": ["..."],
+  "settingWorld": "...",
+  "mainCharacters": ["..."],
+  "relationships": ["..."],
+  "importantCharacteristics": ["..."],
+  "familiarLocationsOrObjects": ["..."],
+  "safeAgeAppropriateElements": ["..."],
+  "copyrightGuardrails": ["..."],
+  "researchSummary": "..."
+}
+
+Rules:
+- Include only public factual context and broad traits.
+- Do NOT reproduce copyrighted stories, episodes, dialogue, or plotlines.
+- We are creating an ORIGINAL story inspired by this character/world.
+- Do not add markdown. JSON only.`;
+
+  const raw = await callGemini({
+    apiKey,
+    prompt,
+    enableSearch: true,
+    maxOutputTokens: 1800,
+  });
+  const text = extractText(raw);
+  let profile = null;
   try {
-    const { characterName, setting, rwLevel } = await request.json();
+    profile = JSON.parse(cleanJsonBlock(text));
+  } catch {
+    profile = {
+      theme,
+      identity: theme,
+      personality: [],
+      settingWorld: setting || 'A child-friendly world',
+      mainCharacters: [theme],
+      relationships: [],
+      importantCharacteristics: [],
+      familiarLocationsOrObjects: [],
+      safeAgeAppropriateElements: ['friendship', 'helping others'],
+      copyrightGuardrails: ['Create original plot and dialogue'],
+      researchSummary: text.slice(0, 700),
+    };
+  }
 
-    // Validate input
-    if (!characterName || characterName.trim().length === 0) {
-      return new Response(
-        JSON.stringify({ error: 'Character name is required' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
+  const groundingChunks = raw?.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+  const sources = groundingChunks
+    .map((chunk) => chunk?.web)
+    .filter(Boolean)
+    .map((web) => ({ title: web.title || web.uri, url: web.uri }))
+    .filter((src) => src.url);
 
-    // Get Gemini API key from environment
-    const geminiToken = process.env.GEMINI_API_KEY;
-    
-    if (!geminiToken) {
-      console.warn('GEMINI_API_KEY not configured, using placeholder story');
-      return new Response(
-        JSON.stringify({ 
-          story: generatePlaceholderStory(characterName, setting, rwLevel),
-          rwLevel: rwLevel
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
+  return {
+    completed: true,
+    profile,
+    sources,
+    rawModel: GEMINI_MODEL,
+  };
+}
 
-    // Create RWI level-appropriate prompt
-    const prompt = createRWIPrompt(characterName, setting, rwLevel);
+async function generateOutline({ apiKey, theme, setting, rwLevel, targets, researchProfile }) {
+  const prompt = `Create a coherent children's story outline inspired by this theme research.
 
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30000);
+Theme: ${theme}
+RWI level: ${rwLevel}
+Target words: ${targets.targetWords}
+Minimum words: ${targets.minimumWords}
+${setting ? `Requested setting: ${setting}` : ''}
 
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${geminiToken}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [{ text: prompt }],
-              },
-            ],
-            generationConfig: {
-              temperature: 0.7,
-              maxOutputTokens: 300,
-            },
-          }),
-          signal: controller.signal,
-        }
-      );
+Research profile JSON:
+${JSON.stringify(researchProfile)}
 
-      clearTimeout(timeout);
-
-      if (!response.ok) {
-        console.error('Gemini API error:', response.status, response.statusText);
-        return new Response(
-          JSON.stringify({
-            story: generatePlaceholderStory(characterName, setting, rwLevel),
-            rwLevel: rwLevel,
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
-
-      const result = await response.json();
-      let story = result?.candidates?.[0]?.content?.parts?.[0]?.text || 
-                  generatePlaceholderStory(characterName, setting, rwLevel);
-
-      return new Response(
-        JSON.stringify({ story, rwLevel }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      );
-    } catch (fetchError) {
-      console.error('Fetch error:', fetchError.message);
-      return new Response(
-        JSON.stringify({
-          story: generatePlaceholderStory(characterName, setting, rwLevel),
-          rwLevel: rwLevel,
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-  } catch (error) {
-    console.error('Error:', error);
-    return new Response(
-      JSON.stringify({ 
-        story: 'Once upon a time, there was an adventure waiting to happen...'
-      }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    );
+Return strict JSON:
+{
+  "title": "...",
+  "setting": "...",
+  "characters": ["..."],
+  "mainProblem": "...",
+  "beginning": "...",
+  "middle": "...",
+  "climax": "...",
+  "resolution": "...",
+  "ending": "...",
+  "narrativeChecks": {
+    "coherentSequence": true,
+    "characterConsistency": true,
+    "settingConsistency": true,
+    "timelineConsistency": true
   }
 }
 
-function createRWIPrompt(characterName, setting, rwLevel) {
-  const levelGuides = {
-    'purple': 'Use ONLY simple CVC words (cat, dog, sit, run). Very short sentences. No complex phonemes.',
-    'pink': 'Use simple CVC words and basic high-frequency words. Short, simple sentences.',
-    'orange': 'Include some digraphs (sh, ch, th). Slightly longer sentences.',
-    'yellow': 'Consolidate phase 3-4 phonemes. Mix of simple and slightly more complex words.',
-    'blue': 'Include phase 4-5 phonemes. Longer sentences with more variety. Good for year 1 readers.',
-    'grey': 'Use phase 5 phonemes. More complex sentences and varied vocabulary.',
-  };
+Rules:
+- Original story only.
+- Include beginning, middle, climax, resolution, ending.
+- Do not return markdown.
+- JSON only.`;
 
-  return `Write a short story (150-250 words) for a 5-6 year old child learning to read.
+  const raw = await callGemini({
+    apiKey,
+    prompt,
+    maxOutputTokens: 1800,
+  });
 
-Main character: ${characterName}
-${setting ? `Setting: ${setting}` : 'Setting: A happy, safe place'}
-Reading level: RWI ${rwLevel.charAt(0).toUpperCase() + rwLevel.slice(1)}
-
-Instructions:
-${levelGuides[rwLevel]}
-- Make it fun, engaging, and appropriate for young children
-- Include a positive, simple message
-- Use clear, easy-to-read language
-- Short paragraphs
-- Include simple actions and emotions the child can understand
-
-Write the story now:`;
+  const text = extractText(raw);
+  const parsed = JSON.parse(cleanJsonBlock(text));
+  return parsed;
 }
 
-function generatePlaceholderStory(characterName, setting, rwLevel) {
-  const stories = {
-    'purple': `${characterName} sat. A cat sat. The cat ran. ${characterName} ran. The cat sat in a box. ${characterName} sat with the cat. They sat. The end.`,
-    'pink': `${characterName} was happy. A cat sat on a mat. The cat was red. ${characterName} sat by the cat. The cat and ${characterName} sat on the mat. They were very happy. The end.`,
-    'orange': `${characterName} was playing with a big red ball. The ball went into the bush. A shy cat came out. The cat wanted to play too. ${characterName} and the cat played with the ball. They had fun together. The end.`,
-    'yellow': `${characterName} found a small box under the tree. Inside was something shiny and gold. It was a magic coin! ${characterName} made a wish. Soon, a beautiful garden grew where the tree stood. ${characterName} and all the friends came to see the amazing garden. Everyone was so happy and smiling. The end.`,
-    'blue': `${characterName} woke up early in the morning and decided to explore the woods behind the house. Walking along the winding path, ${characterName} found a sparkling stream and discovered colorful fish swimming in the water. Following the stream deeper into the forest, ${characterName} discovered a hidden clearing filled with wildflowers. A wise old owl sat in the tallest tree, watching over the magical place. ${characterName} realized that the greatest treasures aren't found in gold or jewels, but in the beauty of nature and adventures with good friends. From that day on, ${characterName} visited the magical clearing every week and became its protector. The end.`,
-    'grey': `${characterName} stumbled upon an ancient lighthouse standing alone on the rocky cliff. The weathered stone structure seemed to tell stories of countless adventures and mysterious journeys through its walls. Inside, ${characterName} discovered a magnificent spiral staircase leading upward into darkness. Climbing carefully, ${characterName} reached the lamp room at the top and was astonished by the breathtaking panoramic view of the endless ocean, distant mountains, and sailing ships below. An old journal resting on a dusty shelf revealed incredible tales of shipwrecked sailors rescued by the lighthouse beam. ${characterName} understood the importance of this beacon and resolved to maintain its light, becoming the guardian of hope for lost travelers. The end.`,
-  };
+async function generateStory({ apiKey, theme, rwLevel, targets, outline, researchProfile }) {
+  const prompt = `Write an ORIGINAL, coherent children's story based on the outline below.
 
-  return stories[rwLevel] || stories['blue'];
+Theme: ${theme}
+RWI level: ${rwLevel}
+Word target range: ${targets.minimumWords}-${Math.max(targets.minimumWords + 120, targets.targetWords + 90)}
+
+Research profile:
+${JSON.stringify(researchProfile)}
+
+Outline:
+${JSON.stringify(outline)}
+
+Rules:
+- Keep character names, setting, and timeline consistent.
+- Include clear beginning, middle, climax, resolution, and satisfying ending.
+- Use age-appropriate language.
+- No copied plot/dialogue from existing copyrighted works.
+- Produce one complete story as paragraphs with natural flow.
+- Do not output JSON or markdown; story text only.`;
+
+  const raw = await callGemini({
+    apiKey,
+    prompt,
+    maxOutputTokens: 6000,
+  });
+  return extractText(raw);
+}
+
+async function validateStoryWithGemini({ apiKey, storyText, theme, rwLevel, minimumWords }) {
+  const prompt = `Evaluate this children's story for quality and reading suitability.
+
+Theme: ${theme}
+RWI level: ${rwLevel}
+Minimum words required: ${minimumWords}
+Actual words: ${countWords(storyText)}
+
+Story:
+${storyText}
+
+Return strict JSON exactly:
+{
+  "coherent": true,
+  "ageAppropriate": true,
+  "hasBeginningMiddleEnd": true,
+  "characterConsistency": true,
+  "difficultyAppropriate": true,
+  "sufficientLength": true,
+  "qualityScore": 0,
+  "issues": []
+}
+
+Quality score must be 0-10.
+JSON only.`;
+
+  const raw = await callGemini({
+    apiKey,
+    prompt,
+    maxOutputTokens: 1500,
+  });
+  const text = extractText(raw);
+  return JSON.parse(cleanJsonBlock(text));
+}
+
+function fallbackStory(theme, setting, targets) {
+  const safeSetting = setting || 'the sunlit valley near Pride Rock';
+  const chunks = [
+    `One bright morning, ${theme} woke early in ${safeSetting}. The air smelled of warm grass, and tiny birds hopped between the stones as the day began.`,
+    `${theme} promised to help younger friends prepare for the Big Moonlight Gathering, where everyone would share stories and songs. But when they reached the meeting hill, the drum used to start the celebration was missing.`,
+    `Without the drum, no one would know when to gather, and the younger cubs started to worry. ${theme} took a deep breath, listened carefully, and noticed a faint rhythm echoing from the river path.`,
+    `Along the way, the group faced small challenges. A narrow log bridge trembled above the stream, and a gust of wind scattered their map leaves. Each time, ${theme} paused, encouraged everyone, and helped them try again.`,
+    `At last they found the drum beside a fig tree where playful monkeys had rolled it while dancing. The monkeys were embarrassed and quickly apologized, offering fruit and help carrying the drum back.`,
+    `When they returned, the gathering began with laughter, music, and relief. ${theme} thanked every helper and reminded everyone that brave hearts grow stronger when friends solve problems together.`,
+    `As moonlight stretched across the rocks, the youngest cub asked for one more story. ${theme} smiled, tapped the drum softly, and began an entirely new adventure for another night.`,
+  ];
+
+  let story = chunks.join('\n\n');
+  while (countWords(story) < targets.minimumWords) {
+    story += `\n\nThey remembered the journey details, from the rippling water to the rustling trees, and each friend shared one lesson they had learned about patience, kindness, and courage.`;
+  }
+  return story;
+}
+
+export async function POST(request) {
+  try {
+    const {
+      characterName,
+      setting,
+      rwLevel = 'blue',
+      previousStoryWordCount,
+      recentPerformance,
+      engagement,
+    } = await request.json();
+
+    if (!characterName || !characterName.trim()) {
+      return jsonResponse({ error: 'Character name is required' }, 400);
+    }
+
+    const theme = characterName.trim();
+    const targets = computeStoryTargets({
+      rwLevel,
+      previousStoryWordCount,
+      recentPerformance,
+      engagement,
+    });
+
+    const geminiToken = process.env.GEMINI_API_KEY;
+    const debug = {
+      theme,
+      rwLevel,
+      model: GEMINI_MODEL,
+      targetWords: targets.targetWords,
+      minimumWords: targets.minimumWords,
+      storyAttempts: [],
+    };
+
+    if (!geminiToken) {
+      const storyText = fallbackStory(theme, setting, targets);
+      const pages = splitStoryIntoPages(storyText, {
+        minWords: targets.preferredPageWordMin,
+        maxWords: targets.preferredPageWordMax,
+      });
+      const quality = validateStoryLocally({
+        storyText,
+        theme,
+        minimumWords: targets.minimumWords,
+        pageWordMin: targets.preferredPageWordMin,
+        pageWordMax: targets.preferredPageWordMax,
+        pages,
+      });
+
+      return jsonResponse({
+        story: storyText,
+        pages,
+        rwLevel,
+        wordCount: quality.wordCount,
+        research: {
+          completed: false,
+          summary: 'No Gemini API key configured. Used local fallback story generation.',
+          sources: [],
+        },
+        qualityValidation: quality,
+        debug: {
+          ...debug,
+          reason: 'fallback_no_api_key',
+        },
+      });
+    }
+
+    const researchResult = await researchTheme({
+      apiKey: geminiToken,
+      theme,
+      setting,
+    });
+
+    debug.researchCompleted = researchResult.completed;
+    debug.researchSourceCount = researchResult.sources.length;
+
+    const outline = await generateOutline({
+      apiKey: geminiToken,
+      theme,
+      setting,
+      rwLevel,
+      targets,
+      researchProfile: researchResult.profile,
+    });
+    debug.outline = outline;
+
+    let selectedStory = '';
+    let selectedQuality = null;
+    let selectedPages = [];
+
+    for (let attempt = 1; attempt <= MAX_STORY_ATTEMPTS; attempt++) {
+      const storyText = await generateStory({
+        apiKey: geminiToken,
+        theme,
+        rwLevel,
+        targets,
+        outline,
+        researchProfile: researchResult.profile,
+      });
+
+      const pages = splitStoryIntoPages(storyText, {
+        minWords: targets.preferredPageWordMin,
+        maxWords: targets.preferredPageWordMax,
+      });
+      const localValidation = validateStoryLocally({
+        storyText,
+        theme,
+        minimumWords: targets.minimumWords,
+        pageWordMin: targets.preferredPageWordMin,
+        pageWordMax: targets.preferredPageWordMax,
+        pages,
+      });
+
+      let aiValidation = null;
+      try {
+        aiValidation = await validateStoryWithGemini({
+          apiKey: geminiToken,
+          storyText,
+          theme,
+          rwLevel,
+          minimumWords: targets.minimumWords,
+        });
+      } catch {
+        aiValidation = null;
+      }
+
+      const mergedQuality = {
+        ...localValidation,
+        ...(aiValidation || {}),
+        qualityScore: Number(
+          (
+            (localValidation.qualityScore * 0.6) +
+            ((aiValidation?.qualityScore || localValidation.qualityScore) * 0.4)
+          ).toFixed(2)
+        ),
+        issues: [...new Set([...(localValidation.issues || []), ...((aiValidation?.issues) || [])])],
+      };
+
+      debug.storyAttempts.push({
+        attempt,
+        wordCount: localValidation.wordCount,
+        qualityScore: mergedQuality.qualityScore,
+        issues: mergedQuality.issues,
+      });
+
+      const pass = mergedQuality.coherent &&
+        mergedQuality.ageAppropriate &&
+        mergedQuality.hasBeginningMiddleEnd &&
+        mergedQuality.characterConsistency &&
+        mergedQuality.difficultyAppropriate &&
+        mergedQuality.sufficientLength &&
+        mergedQuality.qualityScore >= 7;
+
+      if (pass || attempt === MAX_STORY_ATTEMPTS) {
+        selectedStory = storyText;
+        selectedQuality = mergedQuality;
+        selectedPages = pages;
+        break;
+      }
+    }
+
+    return jsonResponse({
+      story: selectedStory,
+      pages: selectedPages,
+      rwLevel,
+      wordCount: selectedQuality?.wordCount || countWords(selectedStory),
+      research: {
+        completed: true,
+        summary: researchResult.profile?.researchSummary || '',
+        profile: researchResult.profile,
+        sources: researchResult.sources,
+      },
+      outline,
+      qualityValidation: selectedQuality,
+      debug,
+    });
+  } catch (error) {
+    console.error('Generation error:', error);
+    return jsonResponse({
+      error: 'Failed to generate story',
+      details: error.message,
+    }, 500);
+  }
 }

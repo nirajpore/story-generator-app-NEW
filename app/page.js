@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import StoryGenerator from '@/components/StoryGenerator';
 import StoryDisplay from '@/components/StoryDisplay';
 import StoryList from '@/components/StoryList';
+import { countWords } from '@/lib/story/pipeline';
 
 export default function Home() {
   const [stories, setStories] = useState([]);
@@ -28,12 +29,22 @@ export default function Home() {
   const handleGenerateStory = async (storyData) => {
     setLoading(true);
     try {
+      const latestStory = stories[0];
+      const previousStoryWordCount = latestStory?.wordCount || (latestStory?.content ? countWords(latestStory.content) : undefined);
+      const recentPerformance = typeof latestStory?.latestReadingOverall === 'number'
+        ? latestStory.latestReadingOverall / 10
+        : undefined;
+
       const response = await fetch('/api/generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(storyData),
+        body: JSON.stringify({
+          ...storyData,
+          previousStoryWordCount,
+          recentPerformance,
+        }),
       });
 
       if (!response.ok) {
@@ -43,8 +54,14 @@ export default function Home() {
       const data = await response.json();
       const newStory = {
         id: Date.now(),
-        title: storyData.characterName ? `${storyData.characterName}'s Adventure` : 'Untitled Story',
+        title: data.outline?.title || (storyData.characterName ? `${storyData.characterName}'s Adventure` : 'Untitled Story'),
         content: data.story,
+        pages: data.pages || [],
+        wordCount: data.wordCount || countWords(data.story || ''),
+        research: data.research,
+        qualityValidation: data.qualityValidation,
+        debug: data.debug,
+        outline: data.outline,
         ...storyData,
         createdAt: new Date().toISOString(),
       };
@@ -75,6 +92,10 @@ export default function Home() {
       {selectedStory ? (
         <StoryDisplay
           story={selectedStory}
+          onStoryUpdate={(updatedStory) => {
+            setStories((prev) => prev.map((item) => (item.id === updatedStory.id ? updatedStory : item)));
+            setSelectedStory(updatedStory);
+          }}
           onBack={() => setSelectedStory(null)}
           onDelete={() => {
             handleDeleteStory(selectedStory.id);
