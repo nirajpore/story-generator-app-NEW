@@ -1,8 +1,8 @@
 import './globals.css';
 
 export const metadata = {
-  title: 'Story Generator - Tales for Kids',
-  description: 'AI-powered story generator for children',
+  title: 'Personal Reading Coach',
+  description: 'Private mobile-first AI reading coach for one child and parents',
 };
 
 export default function RootLayout({ children }) {
