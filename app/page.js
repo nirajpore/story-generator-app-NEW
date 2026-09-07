@@ -1,100 +1,212 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import StoryGenerator from '@/components/StoryGenerator';
-import StoryDisplay from '@/components/StoryDisplay';
-import StoryList from '@/components/StoryList';
+import { useEffect, useMemo, useState } from 'react';
+import ThemeHome from '@/components/ThemeHome';
+import ParentDashboard from '@/components/ParentDashboard';
+import BookReader from '@/components/BookReader';
+import SpeechTestPanel from '@/components/SpeechTestPanel';
+import { loadState, saveState } from '@/lib/storage/appState';
+import { generateStory } from '@/lib/services/storyService';
+import { getChildAdventureLabel, getTargetPageCount, updateDifficultyProfile } from '@/lib/difficultyEngine';
+import { countWords, storyTextFromPages } from '@/lib/storyUtils';
+
+function toThemeId(name) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
 
 export default function Home() {
-  const [stories, setStories] = useState([]);
-  const [selectedStory, setSelectedStory] = useState(null);
+  const [state, setState] = useState(null);
   const [loading, setLoading] = useState(false);
-  const hasLoadedStoriesRef = useRef(false);
+  const [currentStory, setCurrentStory] = useState(null);
+  const [offline, setOffline] = useState(false);
+  const [parentUnlocked, setParentUnlocked] = useState(false);
+  const [showParentPrompt, setShowParentPrompt] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
-    const saved = localStorage.getItem('stories');
-    if (saved) {
-      try {
-        setStories(JSON.parse(saved));
-      } catch (e) {
-        console.error('Failed to parse saved stories:', e);
-      }
-    }
+    const initial = loadState();
+    setState(initial);
+    setOffline(!navigator.onLine);
 
-    hasLoadedStoriesRef.current = true;
+    const onOnline = () => setOffline(false);
+    const onOffline = () => setOffline(true);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
   }, []);
 
   useEffect(() => {
-    if (!hasLoadedStoriesRef.current) return;
-    localStorage.setItem('stories', JSON.stringify(stories));
-  }, [stories]);
+    if (!state) return;
+    saveState(state);
+  }, [state]);
 
-  const handleGenerateStory = async (storyData) => {
+  const previousBestAccuracy = useMemo(
+    () => (state?.readingSessions?.[0]?.accuracy || 70),
+    [state?.readingSessions],
+  );
+
+  if (!state) return null;
+
+  const updateThemes = (nextThemes) => {
+    setState((prev) => ({
+      ...prev,
+      themes: nextThemes.map((theme, index) => ({ ...theme, order: index + 1 })),
+    }));
+  };
+
+  const handlePickTheme = async (theme) => {
+    if (!theme?.name || offline) return;
     setLoading(true);
+    setErrorMessage('');
     try {
-      const response = await fetch('/api/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(storyData),
+      const targetPages = getTargetPageCount(state.readingSessions);
+      const story = await generateStory({
+        theme: theme.name,
+        childProfile: state.child,
+        readingSessions: state.readingSessions,
+        difficultWords: state.difficultWords,
+        targetPageCount: targetPages,
+        previousStories: state.stories.slice(0, 5),
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to generate story');
-      }
-
-      const data = await response.json();
-      const newStory = {
-        id: Date.now(),
-        title: storyData.characterName ? `${storyData.characterName}'s Adventure` : 'Untitled Story',
-        content: data.story,
-        ...storyData,
+      const finalStory = {
+        ...story,
+        id: Date.now().toString(),
         createdAt: new Date().toISOString(),
+        wordCount: story.wordCount || countWords(storyTextFromPages(story.pages)),
       };
 
-      setStories((prevStories) => [newStory, ...prevStories]);
-      setSelectedStory(newStory);
+      setState((prev) => ({
+        ...prev,
+        stories: [finalStory, ...prev.stories],
+      }));
+      setCurrentStory(finalStory);
     } catch (error) {
-      alert('Error generating story: ' + error.message);
+      setErrorMessage(error.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDeleteStory = (id) => {
-    setStories((prevStories) => prevStories.filter((story) => story.id !== id));
-    if (selectedStory?.id === id) {
-      setSelectedStory(null);
+  const handleSessionComplete = (sessionResult) => {
+    setState((prev) => {
+      const mergedWords = { ...prev.difficultWords };
+      Object.values(sessionResult.difficultWords || {}).forEach((word) => {
+        const existing = mergedWords[word.word] || { word: word.word, attempts: 0, correct: 0, missed: 0, confidence: 0.7 };
+        mergedWords[word.word] = {
+          ...existing,
+          attempts: existing.attempts + word.attempts,
+          correct: existing.correct + word.correct,
+          missed: existing.missed + word.missed,
+          confidence: Number((((existing.confidence || 0.7) + (word.confidence || 0.7)) / 2).toFixed(2)),
+        };
+      });
+
+      const nextSessions = [sessionResult, ...prev.readingSessions];
+      const nextChild = updateDifficultyProfile(prev.child, nextSessions);
+      return {
+        ...prev,
+        child: nextChild,
+        readingSessions: nextSessions,
+        difficultWords: mergedWords,
+      };
+    });
+  };
+
+  const addTheme = (name) => {
+    setState((prev) => ({
+      ...prev,
+      themes: [...prev.themes, { id: toThemeId(`${name}-${Date.now()}`), name, emoji: '🟩', favorite: false, order: prev.themes.length + 1 }],
+    }));
+  };
+
+  const removeTheme = (id) => {
+    updateThemes(state.themes.filter((theme) => theme.id !== id));
+  };
+
+  const updateTheme = (id, updates) => {
+    updateThemes(state.themes.map((theme) => (theme.id === id ? { ...theme, ...updates } : theme)));
+  };
+
+  const moveTheme = (id, direction) => {
+    const themes = [...state.themes];
+    const index = themes.findIndex((t) => t.id === id);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= themes.length) return;
+    const [item] = themes.splice(index, 1);
+    themes.splice(target, 0, item);
+    updateThemes(themes);
+  };
+
+  const openParentMode = () => {
+    setShowParentPrompt(true);
+    const value = prompt('Enter parent PIN');
+    setShowParentPrompt(false);
+    if (value === state.parentPin) {
+      setParentUnlocked(true);
+    } else if (value !== null) {
+      alert('Incorrect PIN');
     }
   };
 
-  return (
-    <div>
-      <header style={{ textAlign: 'center', marginBottom: '30px' }}>
-        <h1>Story Generator</h1>
-        <p style={{ color: '#fff', fontSize: '18px' }}>Create magical stories for your loved ones!</p>
-      </header>
+  if (currentStory) {
+    return (
+      <BookReader
+        story={currentStory}
+        speechEngine={state.activeSpeechEngine}
+        previousBestAccuracy={previousBestAccuracy}
+        onComplete={handleSessionComplete}
+        onClose={() => setCurrentStory(null)}
+      />
+    );
+  }
 
-      {selectedStory ? (
-        <StoryDisplay
-          story={selectedStory}
-          onBack={() => setSelectedStory(null)}
-          onDelete={() => {
-            handleDeleteStory(selectedStory.id);
-            setSelectedStory(null);
-          }}
-        />
-      ) : (
-        <div className="grid" style={{ marginBottom: '30px', gridTemplateColumns: '1fr 1fr' }}>
-          <div>
-            <StoryGenerator onGenerate={handleGenerateStory} loading={loading} />
+  if (parentUnlocked) {
+    return (
+      <ParentDashboard
+        child={state.child}
+        themes={state.themes}
+        readingSessions={state.readingSessions}
+        difficultWords={state.difficultWords}
+        speechEngine={state.activeSpeechEngine}
+        onSpeechEngineChange={(engine) => setState((prev) => ({ ...prev, activeSpeechEngine: engine }))}
+        onClose={() => setParentUnlocked(false)}
+        onAddTheme={addTheme}
+        onDeleteTheme={removeTheme}
+        onUpdateTheme={updateTheme}
+        onMoveTheme={moveTheme}
+        speechTest={<SpeechTestPanel engine={state.activeSpeechEngine} />}
+      />
+    );
+  }
+
+  return (
+    <main>
+      <ThemeHome
+        themes={state.themes}
+        loading={loading}
+        offline={offline}
+        adventureLabel={getChildAdventureLabel(state.child.currentLevel)}
+        onPickTheme={handlePickTheme}
+        onOpenParent={openParentMode}
+      />
+      {errorMessage ? <p className="error">{errorMessage}</p> : null}
+      {showParentPrompt ? <p className="loading-note">Checking parent PIN...</p> : null}
+      {!!state.stories.length && (
+        <section className="saved-stories">
+          <h3>📚 Previous adventures</h3>
+          <div className="story-list">
+            {state.stories.slice(0, 8).map((story) => (
+              <button className="story-chip" key={story.id} onClick={() => setCurrentStory(story)}>
+                {story.title}
+              </button>
+            ))}
           </div>
-          <div>
-            <StoryList stories={stories} onSelect={setSelectedStory} onDelete={handleDeleteStory} />
-          </div>
-        </div>
+        </section>
       )}
-    </div>
+    </main>
   );
 }
