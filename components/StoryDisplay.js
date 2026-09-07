@@ -27,6 +27,8 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
   const [manualTranscript, setManualTranscript] = useState('');
   const [showParentDebug, setShowParentDebug] = useState(false);
   const [analysis, setAnalysis] = useState(null);
+  const [transcriptionProvider, setTranscriptionProvider] = useState('gemini_server');
+  const [browserSpeechSupported, setBrowserSpeechSupported] = useState(false);
   const [transcriptionConfidence, setTranscriptionConfidence] = useState(0);
   const [transcriptionModelUsed, setTranscriptionModelUsed] = useState('gemini-3.5-transcribe (server)');
   const [wordTimings, setWordTimings] = useState([]);
@@ -38,10 +40,81 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
   const mediaStreamRef = useRef(null);
   const audioChunksRef = useRef([]);
   const readingDurationRef = useRef(0);
+  const recognitionRef = useRef(null);
+  const confidenceSamplesRef = useRef([]);
+  const confidenceRef = useRef(0);
+  const transcriptRef = useRef('');
+  const browserFinishPendingRef = useRef(false);
+  const runAnalysisRef = useRef(null);
 
   const pages = story.pages?.length ? story.pages : [story.content];
 
   useEffect(() => {
+    transcriptRef.current = transcript;
+  }, [transcript]);
+
+  useEffect(() => {
+    const savedProvider = window.localStorage.getItem('debug_transcription_provider');
+    if (savedProvider === 'browser_web_speech' || savedProvider === 'gemini_server') {
+      setTranscriptionProvider(savedProvider);
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      setBrowserSpeechSupported(true);
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = true;
+      recognitionRef.current.interimResults = true;
+      recognitionRef.current.lang = 'en-US';
+      recognitionRef.current.onresult = (event) => {
+        let finalTranscript = '';
+        let interimTranscript = '';
+        const confidenceSamples = [];
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const result = event.results[i];
+          const chunk = result[0].transcript || '';
+          if (result.isFinal) {
+            finalTranscript += `${chunk} `;
+            if (typeof result[0].confidence === 'number' && result[0].confidence > 0) {
+              confidenceSamples.push(result[0].confidence);
+            }
+          } else {
+            interimTranscript += chunk;
+          }
+        }
+
+        if (confidenceSamples.length) {
+          confidenceSamplesRef.current.push(...confidenceSamples);
+          const average = confidenceSamplesRef.current.reduce((a, b) => a + b, 0) / confidenceSamplesRef.current.length;
+          const rounded = Number(average.toFixed(2));
+          confidenceRef.current = rounded;
+          setTranscriptionConfidence(rounded);
+        }
+
+        if (finalTranscript || interimTranscript) {
+          setTranscript((prev) => {
+            const next = `${prev} ${finalTranscript}${interimTranscript}`.trim();
+            transcriptRef.current = next;
+            return next;
+          });
+        }
+      };
+      recognitionRef.current.onerror = (event) => {
+        setDebugEvents((prev) => [`Browser speech error: ${event.error}`, ...prev].slice(0, 20));
+      };
+      recognitionRef.current.onend = () => {
+        if (browserFinishPendingRef.current) {
+          browserFinishPendingRef.current = false;
+          runAnalysisRef.current?.(transcriptRef.current, readingDurationRef.current, {
+            confidence: confidenceRef.current,
+            model: 'browser-web-speech',
+            words: [],
+          });
+        }
+      };
+    }
+
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
@@ -50,8 +123,15 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       }
+      if (recognitionRef.current) {
+        recognitionRef.current.abort();
+      }
     };
   }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem('debug_transcription_provider', transcriptionProvider);
+  }, [transcriptionProvider]);
 
   const parentAnalysis = useMemo(() => {
     if (!analysis?.score?.canScore) return null;
@@ -75,10 +155,13 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
     const alignment = alignTranscription(cleanExpected, cleanHeard, {
       uncertainThreshold: 0.84,
     });
+    const confidenceForScore = typeof transcriptionMeta.confidence === 'number'
+      ? transcriptionMeta.confidence
+      : transcriptionConfidence;
     const score = scoreReading({
       alignment,
       durationSeconds,
-      transcriptionConfidence,
+      transcriptionConfidence: confidenceForScore,
       priorWpm: story?.latestReadingWpm || 125,
     });
 
@@ -88,6 +171,7 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
       alignment,
       score,
       durationSeconds,
+      transcriptionProvider,
       transcriptionModel: transcriptionMeta.model || transcriptionModelUsed,
       transcriptionWords: transcriptionMeta.words || [],
       scoringWeights: {
@@ -98,9 +182,10 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
         expression: 0.1,
       },
       confidence: {
-        transcription: transcriptionMeta.confidence ?? transcriptionConfidence,
+        transcription: confidenceForScore,
       },
     };
+    runAnalysisRef.current = runAnalysis;
     setAnalysis(result);
 
     if (score.canScore && onStoryUpdate) {
@@ -166,10 +251,38 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
     setDebugEvents([]);
     setWordTimings([]);
     setTranscriptionConfidence(0);
-    setTranscriptionModelUsed('gemini-3.5-transcribe (server)');
+    setTranscriptionModelUsed(transcriptionProvider === 'gemini_server' ? 'gemini-3.5-transcribe (server)' : 'browser-web-speech');
     readingDurationRef.current = 0;
+    confidenceSamplesRef.current = [];
+    confidenceRef.current = 0;
+    transcriptRef.current = '';
+    browserFinishPendingRef.current = false;
 
     timerRef.current = setInterval(() => setReadingTime((prev) => prev + 1), 1000);
+    if (transcriptionProvider === 'browser_web_speech') {
+      if (!recognitionRef.current) {
+        if (timerRef.current) clearInterval(timerRef.current);
+        setIsReading(false);
+        setDebugEvents((prev) => ['Browser speech recognition is not supported on this device.', ...prev].slice(0, 20));
+        runAnalysis('', 0, {
+          confidence: 0,
+          model: 'browser-web-speech',
+          words: [],
+        });
+        return;
+      }
+
+      try {
+        recognitionRef.current.start();
+        setDebugEvents((prev) => ['Recording started with browser speech fallback path', ...prev].slice(0, 20));
+      } catch (error) {
+        if (timerRef.current) clearInterval(timerRef.current);
+        setIsReading(false);
+        setDebugEvents((prev) => [`Browser speech start failed: ${error.message}`, ...prev].slice(0, 20));
+      }
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
@@ -217,6 +330,20 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
     if (timerRef.current) clearInterval(timerRef.current);
     readingDurationRef.current = readingTime;
     setIsReading(false);
+    if (transcriptionProvider === 'browser_web_speech') {
+      if (recognitionRef.current) {
+        browserFinishPendingRef.current = true;
+        recognitionRef.current.stop();
+      } else {
+        runAnalysis(transcriptRef.current, readingTime, {
+          confidence: confidenceRef.current,
+          model: 'browser-web-speech',
+          words: [],
+        });
+      }
+      return;
+    }
+
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
     } else {
@@ -313,7 +440,20 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
               ⏱️ {formatTime(readingTime)}
             </div>
             <div style={{ fontSize: '14px', color: '#555', marginBottom: '10px' }}>
-              <strong>Recording:</strong> <em>Capturing audio for Gemini server transcription…</em>
+              <strong>Provider:</strong>{' '}
+              <em>
+                {transcriptionProvider === 'gemini_server'
+                  ? 'Gemini server transcription (audio upload)'
+                  : 'Browser speech fallback'}
+              </em>
+            </div>
+            {transcriptionProvider === 'browser_web_speech' && (
+              <div style={{ fontSize: '14px', color: '#555', marginBottom: '10px' }}>
+                <strong>Live transcript:</strong> <em>{transcript || 'Listening...'}</em>
+              </div>
+            )}
+            <div style={{ fontSize: '14px', color: '#555', marginBottom: '10px' }}>
+              <strong>Recording:</strong> <em>Capturing reading audio...</em>
             </div>
             <button
               onClick={handleFinishReading}
@@ -398,6 +538,20 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
         {showParentDebug && (
           <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', padding: '14px', background: '#fff' }}>
             <h3>Story & Research Debug</h3>
+            <div style={{ marginBottom: '12px', padding: '10px', border: '1px solid #ddd', borderRadius: '8px', background: '#fafafa' }}>
+              <label htmlFor="transcription-provider-select"><strong>Transcription provider (A/B testing): </strong></label>{' '}
+              <select
+                id="transcription-provider-select"
+                value={transcriptionProvider}
+                onChange={(e) => setTranscriptionProvider(e.target.value)}
+                disabled={isReading || isTranscribing}
+              >
+                <option value="gemini_server">Gemini server (primary)</option>
+                <option value="browser_web_speech" disabled={!browserSpeechSupported}>
+                  Browser speech fallback {browserSpeechSupported ? '' : '(not supported on this browser)'}
+                </option>
+              </select>
+            </div>
             <p><strong>Story word count:</strong> {story.wordCount}</p>
             <p><strong>Story quality score:</strong> {story.qualityValidation?.qualityScore ?? 'N/A'}</p>
             <p><strong>Research completed:</strong> {story.research?.completed ? 'YES' : 'NO'}</p>
@@ -433,6 +587,7 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
             {analysis && (
               <>
                 <p><strong>Transcription model:</strong> {analysis.transcriptionModel}</p>
+                <p><strong>Transcription provider used:</strong> {analysis.transcriptionProvider}</p>
                 <p><strong>Transcription confidence:</strong> {Math.round((analysis.confidence?.transcription || 0) * 100)}%</p>
                 <p><strong>Word timestamps returned:</strong> {analysis.transcriptionWords?.length || wordTimings.length || 0}</p>
                 <p><strong>Transcript:</strong> {analysis.transcript || '(empty)'}</p>
