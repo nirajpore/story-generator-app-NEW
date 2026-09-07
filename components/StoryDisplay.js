@@ -21,65 +21,35 @@ function childFeedback(overall, accuracyScore) {
 export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate }) {
   const [copied, setCopied] = useState(false);
   const [isReading, setIsReading] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [readingTime, setReadingTime] = useState(0);
   const [transcript, setTranscript] = useState('');
   const [manualTranscript, setManualTranscript] = useState('');
   const [showParentDebug, setShowParentDebug] = useState(false);
   const [analysis, setAnalysis] = useState(null);
-  const [transcriptionConfidence, setTranscriptionConfidence] = useState(0.9);
+  const [transcriptionConfidence, setTranscriptionConfidence] = useState(0);
+  const [transcriptionModelUsed, setTranscriptionModelUsed] = useState('gemini-3.5-transcribe (server)');
+  const [wordTimings, setWordTimings] = useState([]);
   const [debugEvents, setDebugEvents] = useState([]);
   const [pageIndex, setPageIndex] = useState(0);
 
   const timerRef = useRef(null);
-  const recognitionRef = useRef(null);
-  const confidenceSamplesRef = useRef([]);
+  const mediaRecorderRef = useRef(null);
+  const mediaStreamRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const readingDurationRef = useRef(0);
 
   const pages = story.pages?.length ? story.pages : [story.content];
 
   useEffect(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
-
-    recognitionRef.current = new SpeechRecognition();
-    recognitionRef.current.continuous = true;
-    recognitionRef.current.interimResults = true;
-
-    recognitionRef.current.onresult = (event) => {
-      let finalTranscript = '';
-      let interimTranscript = '';
-      const confidenceSamples = [];
-
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i];
-        const chunk = result[0].transcript || '';
-        if (result.isFinal) {
-          finalTranscript += `${chunk} `;
-          if (typeof result[0].confidence === 'number' && result[0].confidence > 0) {
-            confidenceSamples.push(result[0].confidence);
-          }
-        } else {
-          interimTranscript += chunk;
-        }
-      }
-
-      if (confidenceSamples.length) {
-        confidenceSamplesRef.current.push(...confidenceSamples);
-        const average = confidenceSamplesRef.current.reduce((a, b) => a + b, 0) / confidenceSamplesRef.current.length;
-        setTranscriptionConfidence(Number(average.toFixed(2)));
-      }
-
-      if (finalTranscript || interimTranscript) {
-        setTranscript((prev) => `${prev}${finalTranscript}${interimTranscript}`.trim());
-      }
-    };
-
-    recognitionRef.current.onerror = (event) => {
-      setDebugEvents((prev) => [`Speech recognition error: ${event.error}`, ...prev].slice(0, 20));
-    };
-
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
-      if (recognitionRef.current) recognitionRef.current.abort();
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      }
     };
   }, []);
 
@@ -98,7 +68,7 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
     };
   }, [analysis]);
 
-  const runAnalysis = (inputTranscript, durationSeconds) => {
+  const runAnalysis = (inputTranscript, durationSeconds, transcriptionMeta = {}) => {
     const cleanExpected = normalizeTextForDisplay(story.content || '');
     const cleanHeard = normalizeTextForDisplay(inputTranscript || '');
 
@@ -118,7 +88,8 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
       alignment,
       score,
       durationSeconds,
-      transcriptionModel: 'browser-web-speech (verbatim-like interim/final capture)',
+      transcriptionModel: transcriptionMeta.model || transcriptionModelUsed,
+      transcriptionWords: transcriptionMeta.words || [],
       scoringWeights: {
         accuracy: 0.5,
         fluency: 0.2,
@@ -127,7 +98,7 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
         expression: 0.1,
       },
       confidence: {
-        transcription: transcriptionConfidence,
+        transcription: transcriptionMeta.confidence ?? transcriptionConfidence,
       },
     };
     setAnalysis(result);
@@ -148,37 +119,123 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
     }
   };
 
-  const handleStartReading = () => {
+  const transcribeServerAudio = async (audioBlob, durationSeconds) => {
+    setIsTranscribing(true);
+    try {
+      const formData = new FormData();
+      formData.append('audio', audioBlob, `reading-${Date.now()}.webm`);
+      const response = await fetch('/api/transcribe', {
+        method: 'POST',
+        body: formData,
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result?.error || result?.details || 'Transcription failed');
+      }
+
+      const transcriptText = result.transcript || '';
+      const confidence = typeof result.confidence === 'number' ? result.confidence : 0.7;
+      const model = result.model || 'gemini-3.5-transcribe';
+      const words = Array.isArray(result.words) ? result.words : [];
+
+      setTranscript(transcriptText);
+      setTranscriptionConfidence(confidence);
+      setTranscriptionModelUsed(model);
+      setWordTimings(words);
+      runAnalysis(transcriptText, durationSeconds, { confidence, model, words });
+    } catch (error) {
+      setDebugEvents((prev) => [`Transcription error: ${error.message}`, ...prev].slice(0, 20));
+      setTranscript('');
+      setTranscriptionConfidence(0);
+      runAnalysis('', durationSeconds, {
+        confidence: 0,
+        model: 'gemini-3.5-transcribe',
+        words: [],
+      });
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  const handleStartReading = async () => {
     setIsReading(true);
+    setIsTranscribing(false);
     setReadingTime(0);
     setTranscript('');
     setAnalysis(null);
     setDebugEvents([]);
-    confidenceSamplesRef.current = [];
-    setTranscriptionConfidence(0.9);
+    setWordTimings([]);
+    setTranscriptionConfidence(0);
+    setTranscriptionModelUsed('gemini-3.5-transcribe (server)');
+    readingDurationRef.current = 0;
 
     timerRef.current = setInterval(() => setReadingTime((prev) => prev + 1), 1000);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      mediaRecorderRef.current = recorder;
 
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.start();
-      } catch {
-        setDebugEvents((prev) => ['Could not start speech recognition', ...prev]);
-      }
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onerror = (event) => {
+        const message = event?.error?.message || 'Recorder error';
+        setDebugEvents((prev) => [`Recorder error: ${message}`, ...prev].slice(0, 20));
+      };
+
+      recorder.onstop = async () => {
+        const mimeType = recorder.mimeType || 'audio/webm';
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        const durationSeconds = readingDurationRef.current;
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+          mediaStreamRef.current = null;
+        }
+        await transcribeServerAudio(audioBlob, durationSeconds);
+      };
+
+      recorder.start(250);
+      setDebugEvents((prev) => ['Recording started with server-side transcription path', ...prev].slice(0, 20));
+    } catch (error) {
+      if (timerRef.current) clearInterval(timerRef.current);
+      setIsReading(false);
+      setDebugEvents((prev) => [`Microphone access failed: ${error.message}`, ...prev].slice(0, 20));
+      runAnalysis('', 0, {
+        confidence: 0,
+        model: 'gemini-3.5-transcribe',
+        words: [],
+      });
     }
   };
 
   const handleFinishReading = () => {
     if (timerRef.current) clearInterval(timerRef.current);
-    if (recognitionRef.current) recognitionRef.current.stop();
+    readingDurationRef.current = readingTime;
     setIsReading(false);
-    runAnalysis(transcript, readingTime);
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    } else {
+      runAnalysis('', readingTime, {
+        confidence: 0,
+        model: 'gemini-3.5-transcribe',
+        words: [],
+      });
+    }
   };
 
   const handleManualAnalysis = () => {
     if (!manualTranscript.trim()) return;
     const estimatedDuration = Math.max(10, Math.round((manualTranscript.split(/\s+/).length / 140) * 60));
-    runAnalysis(manualTranscript, estimatedDuration);
+    runAnalysis(manualTranscript, estimatedDuration, {
+      confidence: 1,
+      model: 'manual-parent-debug-input',
+      words: [],
+    });
   };
 
   const handleShare = () => {
@@ -256,10 +313,7 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
               ⏱️ {formatTime(readingTime)}
             </div>
             <div style={{ fontSize: '14px', color: '#555', marginBottom: '10px' }}>
-              <strong>Live transcript:</strong> <em>{transcript || 'Listening...'}</em>
-            </div>
-            <div style={{ fontSize: '14px', color: '#555', marginBottom: '12px' }}>
-              <strong>Transcription confidence:</strong> {Math.round(transcriptionConfidence * 100)}%
+              <strong>Recording:</strong> <em>Capturing audio for Gemini server transcription…</em>
             </div>
             <button
               onClick={handleFinishReading}
@@ -275,6 +329,12 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
             >
               ✓ Finish Reading
             </button>
+          </div>
+        )}
+
+        {isTranscribing && (
+          <div style={{ background: '#fffaf0', padding: '14px', borderRadius: '8px', marginBottom: '20px', border: '1px solid #f6ad55' }}>
+            <strong>Transcribing audio on server with Gemini…</strong>
           </div>
         )}
 
@@ -374,6 +434,7 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
               <>
                 <p><strong>Transcription model:</strong> {analysis.transcriptionModel}</p>
                 <p><strong>Transcription confidence:</strong> {Math.round((analysis.confidence?.transcription || 0) * 100)}%</p>
+                <p><strong>Word timestamps returned:</strong> {analysis.transcriptionWords?.length || wordTimings.length || 0}</p>
                 <p><strong>Transcript:</strong> {analysis.transcript || '(empty)'}</p>
                 <p><strong>Expected text:</strong> {analysis.expectedText.slice(0, 500)}{analysis.expectedText.length > 500 ? '…' : ''}</p>
                 <div style={{ overflowX: 'auto' }}>
