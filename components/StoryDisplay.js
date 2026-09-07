@@ -166,6 +166,7 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
     });
 
     const result = {
+      analyzedAt: new Date().toISOString(),
       expectedText: cleanExpected,
       transcript: cleanHeard,
       alignment,
@@ -485,6 +486,7 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
                 <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#2f855a', marginBottom: '10px' }}>
                   🌟 {Math.round(score.overall)} / 10
                 </div>
+                <p style={{ marginBottom: '8px' }}><strong>Reading time:</strong> {formatTime(analysis.durationSeconds)}</p>
                 <p style={{ marginBottom: '12px' }}>{childFeedback(score.overall, score.accuracy.score)}</p>
               </>
             ) : (
@@ -492,6 +494,7 @@ export default function StoryDisplay({ story, onBack, onDelete, onStoryUpdate })
                 <div style={{ fontSize: '22px', fontWeight: 'bold', color: '#975a16', marginBottom: '10px' }}>
                   🎤 We couldn’t hear the reading clearly enough to score this one.
                 </div>
+                <p style={{ marginBottom: '8px' }}><strong>Reading time:</strong> {formatTime(analysis.durationSeconds || 0)}</p>
                 <p style={{ marginBottom: '12px' }}>Try again in a quieter room and keep the microphone close.</p>
               </>
             )}

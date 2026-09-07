@@ -5,35 +5,63 @@ import StoryGenerator from '@/components/StoryGenerator';
 import StoryDisplay from '@/components/StoryDisplay';
 import StoryList from '@/components/StoryList';
 import { countWords } from '@/lib/story/pipeline';
+import DeveloperStatusPanel from '@/components/DeveloperStatusPanel';
+import { APP_NAME, APP_VERSION, BUILD_ID } from '@/lib/app/version';
+import { loadAppState, saveAppState, summarizeRecentPerformance, updateDifficultWords } from '@/lib/storage/appState';
 
 export default function Home() {
   const [stories, setStories] = useState([]);
   const [selectedStory, setSelectedStory] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [appState, setAppState] = useState(null);
+  const [showDevStatus, setShowDevStatus] = useState(false);
+  const [apiStatus, setApiStatus] = useState('Not checked');
 
   useEffect(() => {
-    const saved = localStorage.getItem('stories');
-    if (saved) {
-      try {
-        setStories(JSON.parse(saved));
-      } catch (e) {
-        console.error('Failed to parse saved stories:', e);
-      }
-    }
+    const loaded = loadAppState();
+    setAppState(loaded);
+    setStories(loaded.stories || []);
   }, []);
 
+  const commitState = (nextState) => {
+    setAppState(nextState);
+    saveAppState(nextState);
+  };
+
   useEffect(() => {
-    localStorage.setItem('stories', JSON.stringify(stories));
-  }, [stories]);
+    let cancelled = false;
+    async function checkApi() {
+      try {
+        const response = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        const data = await response.json();
+        if (cancelled) return;
+        if (response.status === 400 && data?.error === 'Character name is required') {
+          setApiStatus('Reachable');
+        } else {
+          setApiStatus(`Unexpected status ${response.status}`);
+        }
+      } catch {
+        if (!cancelled) setApiStatus('Unavailable');
+      }
+    }
+    checkApi();
+    return () => { cancelled = true; };
+  }, []);
 
   const handleGenerateStory = async (storyData) => {
     setLoading(true);
     try {
       const latestStory = stories[0];
       const previousStoryWordCount = latestStory?.wordCount || (latestStory?.content ? countWords(latestStory.content) : undefined);
-      const recentPerformance = typeof latestStory?.latestReadingOverall === 'number'
+      const perf = summarizeRecentPerformance(appState?.readingSessions || []);
+      const recentPerformance = perf.recentPerformance ?? (typeof latestStory?.latestReadingOverall === 'number'
         ? latestStory.latestReadingOverall / 10
-        : undefined;
+        : undefined);
+      const engagement = perf.engagement;
 
       const response = await fetch('/api/generate', {
         method: 'POST',
@@ -44,6 +72,7 @@ export default function Home() {
           ...storyData,
           previousStoryWordCount,
           recentPerformance,
+          engagement,
         }),
       });
 
@@ -66,7 +95,13 @@ export default function Home() {
         createdAt: new Date().toISOString(),
       };
 
-      setStories([newStory, ...stories]);
+      const nextStories = [newStory, ...stories];
+      setStories(nextStories);
+      const nextState = {
+        ...(appState || {}),
+        stories: nextStories,
+      };
+      commitState(nextState);
       setSelectedStory(newStory);
     } catch (error) {
       alert('Error generating story: ' + error.message);
@@ -76,26 +111,74 @@ export default function Home() {
   };
 
   const handleDeleteStory = (id) => {
-    setStories(stories.filter((story) => story.id !== id));
+    const nextStories = stories.filter((story) => story.id !== id);
+    setStories(nextStories);
+    const nextState = {
+      ...(appState || {}),
+      stories: nextStories,
+    };
+    commitState(nextState);
     if (selectedStory?.id === id) {
       setSelectedStory(null);
     }
   };
 
+  const handleStoryUpdate = (updatedStory) => {
+    const nextStories = stories.map((item) => (item.id === updatedStory.id ? updatedStory : item));
+    setStories(nextStories);
+
+    let nextSessions = appState?.readingSessions || [];
+    let nextDifficultWords = appState?.difficultWords || {};
+    const analysis = updatedStory?.readingAnalysis;
+    if (analysis?.analyzedAt) {
+      const session = {
+        id: analysis.analyzedAt,
+        storyId: updatedStory.id,
+        storyTitle: updatedStory.title,
+        rwLevel: updatedStory.rwLevel,
+        score: analysis.score,
+        durationSeconds: analysis.durationSeconds,
+        transcriptionModel: analysis.transcriptionModel,
+        transcriptionProvider: analysis.transcriptionProvider,
+        createdAt: analysis.analyzedAt,
+      };
+      nextSessions = [session, ...nextSessions.filter((item) => item.id !== session.id)].slice(0, 50);
+      nextDifficultWords = updateDifficultWords(nextDifficultWords, analysis, analysis.analyzedAt);
+    }
+
+    const nextState = {
+      ...(appState || {}),
+      stories: nextStories,
+      readingSessions: nextSessions,
+      difficultWords: nextDifficultWords,
+      childProfile: {
+        ...(appState?.childProfile || {}),
+        rwLevel: updatedStory.rwLevel || appState?.childProfile?.rwLevel || 'blue',
+      },
+    };
+    commitState(nextState);
+    setSelectedStory(updatedStory);
+  };
+
   return (
     <div>
       <header style={{ textAlign: 'center', marginBottom: '30px' }}>
-        <h1>Story Generator</h1>
+        <h1>{APP_NAME} {APP_VERSION}</h1>
+        <p style={{ color: '#fff', fontSize: '14px' }}>Build: {BUILD_ID}</p>
         <p style={{ color: '#fff', fontSize: '18px' }}>Create magical stories for your loved ones!</p>
+        <button onClick={() => setShowDevStatus((prev) => !prev)} style={{ marginTop: '10px' }}>
+          {showDevStatus ? 'Hide Development Status' : 'Show Development Status'}
+        </button>
       </header>
+
+      {showDevStatus && (
+        <DeveloperStatusPanel latestStory={stories[0]} apiStatus={apiStatus} />
+      )}
 
       {selectedStory ? (
         <StoryDisplay
           story={selectedStory}
-          onStoryUpdate={(updatedStory) => {
-            setStories((prev) => prev.map((item) => (item.id === updatedStory.id ? updatedStory : item)));
-            setSelectedStory(updatedStory);
-          }}
+          onStoryUpdate={handleStoryUpdate}
           onBack={() => setSelectedStory(null)}
           onDelete={() => {
             handleDeleteStory(selectedStory.id);

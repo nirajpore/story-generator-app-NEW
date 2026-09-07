@@ -2,6 +2,7 @@ import { computeStoryTargets, splitStoryIntoPages, validateStoryLocally, countWo
 
 const GEMINI_MODEL = 'gemini-2.5-flash';
 const MAX_STORY_ATTEMPTS = 3;
+const MAX_OUTLINE_ATTEMPTS = 2;
 
 function jsonResponse(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
@@ -114,7 +115,8 @@ Rules:
     .filter((src) => src.url);
 
   return {
-    completed: true,
+    completed: sources.length > 0,
+    status: sources.length > 0 ? 'completed' : 'no_sources',
     profile,
     sources,
     rawModel: GEMINI_MODEL,
@@ -167,6 +169,22 @@ Rules:
   const text = extractText(raw);
   const parsed = JSON.parse(cleanJsonBlock(text));
   return parsed;
+}
+
+function validateOutlineLocally(outline) {
+  const requiredTextFields = ['title', 'setting', 'mainProblem', 'beginning', 'middle', 'climax', 'resolution', 'ending'];
+  const missing = requiredTextFields.filter((field) => !outline?.[field] || String(outline[field]).trim().length < 12);
+  const hasCharacters = Array.isArray(outline?.characters) && outline.characters.length >= 1;
+  const checks = outline?.narrativeChecks || {};
+  const checksPass = checks.coherentSequence && checks.characterConsistency && checks.settingConsistency && checks.timelineConsistency;
+  return {
+    valid: missing.length === 0 && hasCharacters && checksPass,
+    issues: [
+      ...missing.map((field) => `Outline missing strong ${field}`),
+      ...(hasCharacters ? [] : ['Outline missing characters list']),
+      ...(checksPass ? [] : ['Outline narrative checks failed']),
+    ],
+  };
 }
 
 async function generateStory({ apiKey, theme, rwLevel, targets, outline, researchProfile }) {
@@ -282,7 +300,9 @@ export async function POST(request) {
       model: GEMINI_MODEL,
       targetWords: targets.targetWords,
       minimumWords: targets.minimumWords,
-      storyAttempts: [],
+    targetPageCount: `${targets.targetPageCountMin}-${targets.targetPageCountMax}`,
+    storyAttempts: [],
+    outlineAttempts: [],
     };
 
     if (!geminiToken) {
@@ -297,6 +317,8 @@ export async function POST(request) {
         minimumWords: targets.minimumWords,
         pageWordMin: targets.preferredPageWordMin,
         pageWordMax: targets.preferredPageWordMax,
+        pageCountMin: targets.targetPageCountMin,
+        pageCountMax: targets.targetPageCountMax,
         pages,
       });
 
@@ -313,6 +335,8 @@ export async function POST(request) {
         qualityValidation: quality,
         debug: {
           ...debug,
+          pipelineStatus: 'fallback_no_api_key',
+          storyValidationPassed: quality.coherent && quality.sufficientLength && quality.pageCountValid,
           reason: 'fallback_no_api_key',
         },
       });
@@ -327,14 +351,27 @@ export async function POST(request) {
     debug.researchCompleted = researchResult.completed;
     debug.researchSourceCount = researchResult.sources.length;
 
-    const outline = await generateOutline({
-      apiKey: geminiToken,
-      theme,
-      setting,
-      rwLevel,
-      targets,
-      researchProfile: researchResult.profile,
-    });
+    let outline = null;
+    for (let attempt = 1; attempt <= MAX_OUTLINE_ATTEMPTS; attempt++) {
+      const candidate = await generateOutline({
+        apiKey: geminiToken,
+        theme,
+        setting,
+        rwLevel,
+        targets,
+        researchProfile: researchResult.profile,
+      });
+      const outlineValidation = validateOutlineLocally(candidate);
+      debug.outlineAttempts.push({
+        attempt,
+        valid: outlineValidation.valid,
+        issues: outlineValidation.issues,
+      });
+      if (outlineValidation.valid || attempt === MAX_OUTLINE_ATTEMPTS) {
+        outline = candidate;
+        break;
+      }
+    }
     debug.outline = outline;
 
     let selectedStory = '';
@@ -361,6 +398,8 @@ export async function POST(request) {
         minimumWords: targets.minimumWords,
         pageWordMin: targets.preferredPageWordMin,
         pageWordMax: targets.preferredPageWordMax,
+        pageCountMin: targets.targetPageCountMin,
+        pageCountMax: targets.targetPageCountMax,
         pages,
       });
 
@@ -401,6 +440,7 @@ export async function POST(request) {
         mergedQuality.hasBeginningMiddleEnd &&
         mergedQuality.characterConsistency &&
         mergedQuality.difficultyAppropriate &&
+        mergedQuality.pageCountValid &&
         mergedQuality.sufficientLength &&
         mergedQuality.qualityScore >= 7;
 
@@ -418,7 +458,8 @@ export async function POST(request) {
       rwLevel,
       wordCount: selectedQuality?.wordCount || countWords(selectedStory),
       research: {
-        completed: true,
+        completed: researchResult.completed,
+        status: researchResult.status,
         summary: researchResult.profile?.researchSummary || '',
         profile: researchResult.profile,
         sources: researchResult.sources,
@@ -426,6 +467,7 @@ export async function POST(request) {
       outline,
       qualityValidation: selectedQuality,
       debug,
+      pipelineStatus: selectedQuality?.coherent ? 'pass' : 'partial',
     });
   } catch (error) {
     console.error('Generation error:', error);
