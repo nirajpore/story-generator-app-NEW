@@ -63,13 +63,13 @@ test('Test 4: slow but correct keeps accuracy high, speed lower', () => {
   const alignment = alignTranscription(expectedText, expectedText);
   const fastScore = scoreReading({
     alignment,
-    durationSeconds: 100,
+    durationSeconds: 22,
     transcriptionConfidence: 0.95,
     priorWpm: 130,
   });
   const slowScore = scoreReading({
     alignment,
-    durationSeconds: 260,
+    durationSeconds: 45,
     transcriptionConfidence: 0.95,
     priorWpm: 130,
   });
