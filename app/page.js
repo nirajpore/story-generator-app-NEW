@@ -36,15 +36,16 @@ export default function Home() {
         body: JSON.stringify(storyData),
       });
 
+      const data = await response.json();
       if (!response.ok) {
-        throw new Error('Failed to generate story');
+        throw new Error(data.error || 'Failed to generate story');
       }
 
-      const data = await response.json();
       const newStory = {
         id: Date.now(),
         title: storyData.characterName ? `${storyData.characterName}'s Adventure` : 'Untitled Story',
         content: data.story,
+        aiGeneration: data.aiGeneration || null,
         ...storyData,
         createdAt: new Date().toISOString(),
       };

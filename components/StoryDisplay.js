@@ -206,6 +206,26 @@ export default function StoryDisplay({ story, onBack, onDelete }) {
           {story.characterName && <p><strong>Character:</strong> {story.characterName}</p>}
           {story.setting && <p><strong>Setting:</strong> {story.setting}</p>}
         </div>\n
+        {process.env.NODE_ENV !== 'production' && story.aiGeneration && (
+          <div
+            style={{
+              background: '#f7fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: '6px',
+              padding: '12px',
+              marginBottom: '20px',
+              fontSize: '14px',
+            }}
+          >
+            <p style={{ margin: 0, fontWeight: 'bold' }}>AI GENERATION</p>
+            <p style={{ margin: '6px 0 0 0' }}><strong>Provider:</strong> {story.aiGeneration.provider}</p>
+            <p style={{ margin: '4px 0 0 0' }}><strong>Model:</strong> {story.aiGeneration.model}</p>
+            <p style={{ margin: '4px 0 0 0' }}>
+              <strong>Generated:</strong> {new Date(story.aiGeneration.timestamp).toLocaleString()}
+            </p>
+          </div>
+        )}
+
         <div className="story-content" style={{ marginBottom: '30px', lineHeight: '1.8', fontSize: '18px', whiteSpace: 'pre-wrap' }}>
           {story.content}
         </div>\n
