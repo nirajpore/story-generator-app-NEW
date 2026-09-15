@@ -1,3 +1,4 @@
+/* eslint-disable react/no-unescaped-entities */
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -102,8 +103,8 @@ export default function SpeechTestPage() {
 
       <div style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#e9ecef', borderRadius: '5px' }}>
         <h3>Test Instructions:</h3>
-        <p>Click "Start Recording", then speak clearly:</p>
-        <p style={{ fontSize: '18px', fontWeight: 'bold', color: '#0c5460' }}>"{testPhrase}"</p>
+        <p>Click &quot;Start Recording&quot;, then speak clearly:</p>
+        <p style={{ fontSize: '18px', fontWeight: 'bold', color: '#0c5460' }}>&quot;{testPhrase}&quot;</p>
       </div>
 
       <div style={{ marginBottom: '20px' }}>
@@ -173,7 +174,7 @@ export default function SpeechTestPage() {
         <p style={{ fontFamily: 'monospace', backgroundColor: '#ffffff', padding: '10px', borderRadius: '3px' }}>
           The quick brown fox jumps over the lazy dog
         </p>
-        <p>Or a close variation like "the quick brown fox jumps over lazy dog"</p>
+        <p>Or a close variation like &quot;the quick brown fox jumps over lazy dog&quot;</p>
       </div>
 
       <div style={{ marginTop: '30px', fontSize: '14px', color: '#6c757d' }}>

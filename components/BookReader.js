@@ -125,7 +125,7 @@ export default function BookReader({
           {/* Debug info - shows what's being captured */}
           <div className="debug-info" style={{background: '#f0f0f0', padding: '15px', marginTop: '20px', borderRadius: '5px', fontSize: '12px'}}>
             <h4>📊 Debug Analysis:</h4>
-            <p><strong>Transcript captured:</strong> "{result.transcript.substring(0, 150)}..."</p>
+            <p><strong>Transcript captured:</strong> &quot;{result.transcript.substring(0, 150)}...&quot;</p>
             <p><strong>Speech confidence:</strong> {result.recognitionConfidence}</p>
             <p><strong>Accuracy:</strong> {result.accuracy}%</p>
             <p><strong>Story word count:</strong> {flattenedText.split(' ').length} words</p>
@@ -144,7 +144,7 @@ export default function BookReader({
                 <ul>
                   {result.mistakes.slice(0, 5).map((mistake, i) => (
                     <li key={i}>
-                      "{mistake.word}" → "{mistake.spoken || 'missing'}" 
+                      &quot;{mistake.word}&quot; → &quot;{mistake.spoken || 'missing'}&quot; 
                       (confidence: {mistake.confidence?.toFixed(2) || 'N/A'})
                     </li>
                   ))}

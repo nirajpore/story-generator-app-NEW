@@ -1,3 +1,4 @@
+/* eslint-disable react/no-unescaped-entities */
 'use client';
 
 import { useState } from 'react';
@@ -63,10 +64,10 @@ export default function AppSpeechTest() {
 
       <div style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#e9ecef', borderRadius: '5px' }}>
         <h3>Test Instructions:</h3>
-        <p>1. Click "Start Test" (allow microphone permissions)</p>
+        <p>1. Click &quot;Start Test&quot; (allow microphone permissions)</p>
         <p>2. Speak clearly:</p>
-        <p style={{ fontSize: '18px', fontWeight: 'bold', color: '#0c5460' }}>"{testText}"</p>
-        <p>3. Click "Stop & Get Results"</p>
+        <p style={{ fontSize: '18px', fontWeight: 'bold', color: '#0c5460' }}>&quot;{testText}&quot;</p>
+        <p>3. Click &quot;Stop &amp; Get Results&quot;</p>
       </div>
 
       <div style={{ marginBottom: '20px' }}>
