@@ -113,9 +113,19 @@ export default function BookReader({
         <>
           <div className="completion-card">
             <h3>🎉 Story Complete!</h3>
-            <p>⭐ {result.score}/10</p>
+            {result.starRating ? (
+              <p className="star-rating-large">{result.starRating}</p>
+            ) : (
+              <p>⭐ {result.score}/10</p>
+            )}
+            {result.category && <p className="category-badge">{result.category} {result.emojiScore}</p>}
             <p>⏱️ You read the whole story in {formatTime(result.durationSeconds)}!</p>
-            <p>🌟 {result.childMessage}</p>
+            <p className="encouraging-message">🌟 {result.childMessage}</p>
+            <div className="score-details" style={{marginTop: '10px', padding: '10px', background: '#f8f9fa', borderRadius: '5px'}}>
+              <p style={{margin: '5px 0'}}><strong>Accuracy:</strong> {result.accuracy}%</p>
+              <p style={{margin: '5px 0'}}><strong>Words per minute:</strong> {result.wordsPerMinute}</p>
+              <p style={{margin: '5px 0'}}><strong>Expression:</strong> {result.expression}/100</p>
+            </div>
             <div className="completion-actions">
               <button onClick={onClose}>📖 Read another adventure</button>
               <button className="secondary-btn" onClick={onClose}>🚀 Continue tomorrow</button>
