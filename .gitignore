@@ -1,3 +1,8 @@
+# Test files to exclude
+simple_speech_test.html
+test_web_speech.html
+test_speech_debug.js
+null
 node_modules
 .next
 .env.local

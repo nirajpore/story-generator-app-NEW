@@ -110,16 +110,49 @@ export default function BookReader({
       </div>
 
       {result ? (
-        <div className="completion-card">
-          <h3>🎉 Story Complete!</h3>
-          <p>⭐ {result.score}/10</p>
-          <p>⏱️ You read the whole story in {formatTime(result.durationSeconds)}!</p>
-          <p>🌟 {result.childMessage}</p>
-          <div className="completion-actions">
-            <button onClick={onClose}>📖 Read another adventure</button>
-            <button className="secondary-btn" onClick={onClose}>🚀 Continue tomorrow</button>
+        <>
+          <div className="completion-card">
+            <h3>🎉 Story Complete!</h3>
+            <p>⭐ {result.score}/10</p>
+            <p>⏱️ You read the whole story in {formatTime(result.durationSeconds)}!</p>
+            <p>🌟 {result.childMessage}</p>
+            <div className="completion-actions">
+              <button onClick={onClose}>📖 Read another adventure</button>
+              <button className="secondary-btn" onClick={onClose}>🚀 Continue tomorrow</button>
+            </div>
           </div>
-        </div>
+          
+          {/* Debug info - shows what's being captured */}
+          <div className="debug-info" style={{background: '#f0f0f0', padding: '15px', marginTop: '20px', borderRadius: '5px', fontSize: '12px'}}>
+            <h4>📊 Debug Analysis:</h4>
+            <p><strong>Transcript captured:</strong> "{result.transcript.substring(0, 150)}..."</p>
+            <p><strong>Speech confidence:</strong> {result.recognitionConfidence}</p>
+            <p><strong>Accuracy:</strong> {result.accuracy}%</p>
+            <p><strong>Story word count:</strong> {flattenedText.split(' ').length} words</p>
+            <p><strong>Matched words:</strong> {result._debug?.matchesCount || Math.round((result.accuracy/100) * (flattenedText.split(' ').length))}/{flattenedText.split(' ').length}</p>
+            <p><strong>Mistakes detected:</strong> {result.mistakes?.length || 0}</p>
+            {result._debug && (
+              <div style={{marginTop: '10px', padding: '10px', backgroundColor: '#e9ecef', borderRadius: '5px'}}>
+                <p><strong>Debug Details:</strong></p>
+                <p>Expected: {result._debug.expectedWordCount} words | Heard: {result._debug.heardWordCount} words</p>
+                <p>Weighted accuracy: {result._debug.weightedAccuracy}% | Traditional: {result._debug.traditionalAccuracy}%</p>
+              </div>
+            )}
+            {result.mistakes && result.mistakes.length > 0 && (
+              <div>
+                <p><strong>Top mistakes:</strong></p>
+                <ul>
+                  {result.mistakes.slice(0, 5).map((mistake, i) => (
+                    <li key={i}>
+                      "{mistake.word}" → "{mistake.spoken || 'missing'}" 
+                      (confidence: {mistake.confidence?.toFixed(2) || 'N/A'})
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </>
       ) : null}
     </div>
   );
