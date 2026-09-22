@@ -141,7 +141,6 @@ button:disabled {
 }
 
 .reader-shell {
-  position: relative;
   min-height: 100vh;
   padding: 20px;
 }
@@ -155,7 +154,9 @@ button:disabled {
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  z-index: -1;
+  z-index: 0;
+  opacity: 0.8;
+  filter: blur(1px);
   /* Fallback color that shows while image loads */
   background-color: #667eea;
   /* Image will be set by JavaScript via background-image */
