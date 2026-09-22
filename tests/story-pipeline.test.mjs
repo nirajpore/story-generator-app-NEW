@@ -25,6 +25,6 @@ test('page splitting yields meaningful page count for ~360 words', () => {
   const longStory = Array.from({ length: 18 }).map(() => paragraph).join('\n\n');
   const words = countWords(longStory);
   assert.ok(words > 350 && words < 450);
-  const pages = splitStoryIntoPages(longStory, { minWords: 65, maxWords: 110 });
-  assert.ok(pages.length >= 4 && pages.length <= 6);
+  const pages = splitStoryIntoPages(longStory, { minWords: 45, maxWords: 80 });
+  assert.ok(pages.length >= 5 && pages.length <= 7);
 });

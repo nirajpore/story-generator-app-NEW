@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from 'react';
 import { analyzeReading, mergeDifficultWords } from '@/lib/readingAnalysis';
 import { storyTextFromPages } from '@/lib/storyUtils';
 import { createSpeechService } from '@/lib/speech/factory';
+import { getStoryBackground } from '@/lib/backgroundUtils';
 
 function formatTime(seconds) {
   const mins = Math.floor(seconds / 60);
@@ -83,6 +84,9 @@ export default function BookReader({
 
       <div
         className="book-page"
+        style={{
+          backgroundImage: `url(${getStoryBackground(story.theme, currentPage)})`,
+        }}
         onTouchStart={(e) => { startX.current = e.changedTouches[0].clientX; }}
         onTouchEnd={(e) => {
           const delta = e.changedTouches[0].clientX - startX.current;
