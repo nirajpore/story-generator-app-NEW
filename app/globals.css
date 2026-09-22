@@ -154,22 +154,6 @@ button:disabled {
   background-repeat: no-repeat;
 }
 
-.book-page::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: linear-gradient(rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.96));
-  z-index: 1;
-}
-
-.book-page > * {
-  position: relative;
-  z-index: 2;
-}
-
 .book-page:active {
   transform: scale(0.995);
 }
@@ -177,12 +161,20 @@ button:disabled {
 .page-number {
   color: #6b7280;
   font-size: 14px;
+  background: rgba(255, 255, 255, 0.8);
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 20px;
+  margin-bottom: 10px;
 }
 
 .page-text {
   margin-top: 12px;
   font-size: 25px;
   line-height: 1.7;
+  background: rgba(255, 255, 255, 0.85);
+  padding: 15px;
+  border-radius: 10px;
 }
 
 .reader-controls, .reader-actions, .completion-actions {
@@ -321,6 +313,7 @@ input, select, textarea {
 
   .page-text {
     font-size: 22px;
+    padding: 12px;
   }
 
   button {
