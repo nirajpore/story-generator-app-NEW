@@ -116,10 +116,17 @@ export default function Home() {
     });
   };
 
-  const addTheme = (name) => {
+  const addTheme = (name, customBackground = null) => {
     setState((prev) => ({
       ...prev,
-      themes: [...prev.themes, { id: toThemeId(`${name}-${Date.now()}`), name, emoji: '🟩', favorite: false, order: prev.themes.length + 1 }],
+      themes: [...prev.themes, { 
+        id: toThemeId(`${name}-${Date.now()}`), 
+        name, 
+        emoji: '🟩', 
+        favorite: false, 
+        order: prev.themes.length + 1,
+        customBackground // Store custom background image as base64
+      }],
     }));
   };
 

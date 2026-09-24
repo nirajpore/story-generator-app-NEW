@@ -1,10 +1,11 @@
 'use client';
 
 import { useMemo, useRef, useState } from 'react';
-import { analyzeReading, mergeDifficultWords } from '@/lib/readingAnalysis';
+import { analyzeReading, mergeDifficultWords, validateComprehensionQuestions } from '@/lib/readingAnalysis';
 import { storyTextFromPages } from '@/lib/storyUtils';
 import { createSpeechService } from '@/lib/speech/factory';
 import { getStoryBackground } from '@/lib/backgroundUtils';
+import ComprehensionPanel from './ComprehensionPanel';
 
 function formatTime(seconds) {
   const mins = Math.floor(seconds / 60);
@@ -19,11 +20,23 @@ export default function BookReader({
   onClose,
   onComplete,
 }) {
+  console.log('BookReader story:', story);
+  console.log('Comprehension questions:', story?.comprehensionQuestions);
+  
+  // Debug: Validate and log comprehension questions
+  const validatedQuestions = validateComprehensionQuestions(story?.comprehensionQuestions);
+  console.log('Validated questions count:', validatedQuestions.length);
+  
+  // For testing: Always show comprehension if we have at least 1 valid question
+  const hasQuestions = validatedQuestions.length > 0;
   const [currentPage, setCurrentPage] = useState(0);
   const [reading, setReading] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [result, setResult] = useState(null);
   const [liveHint, setLiveHint] = useState('');
+  const [showComprehension, setShowComprehension] = useState(false);
+  const [comprehensionAnswers, setComprehensionAnswers] = useState([]);
+  const [comprehensionScore, setComprehensionScore] = useState(null);
   const timerRef = useRef(null);
   const speechRef = useRef(null);
   const startX = useRef(0);
@@ -137,9 +150,14 @@ export default function BookReader({
                 <p style={{margin: '5px 0'}}><strong>Expression:</strong> {result.expression}/100</p>
               </div>
               <div className="completion-actions">
-                <button onClick={onClose}>📖 Read another adventure</button>
-                <button className="secondary-btn" onClick={onClose}>🚀 Continue tomorrow</button>
-              </div>
+              {hasQuestions && !showComprehension && (
+                <button onClick={() => setShowComprehension(true)} className="comprehension-start-btn">
+                  📚 Check Your Understanding
+                </button>
+              )}
+              <button onClick={onClose}>📖 Read another adventure</button>
+              <button className="secondary-btn" onClick={onClose}>🚀 Continue tomorrow</button>
+            </div>
             </div>
             
             {/* Debug info - shows what's being captured */}
@@ -174,6 +192,51 @@ export default function BookReader({
             </div>
           </>
         ) : null}
+
+        {/* Comprehension Panel */}
+        {showComprehension && hasQuestions && (
+          <div className="comprehension-container">
+            <ComprehensionPanel
+              questions={validatedQuestions}
+              onComplete={(comprehensionResult) => {
+                setComprehensionScore(comprehensionResult);
+                // Store comprehension results with reading results
+                if (onComplete && result) {
+                  onComplete({
+                    ...result,
+                    comprehension: comprehensionResult
+                  });
+                }
+              }}
+              onSkip={() => setShowComprehension(false)}
+            />
+          </div>
+        )}
+
+        {/* Show Comprehension Score */}
+        {comprehensionScore && !showComprehension && (
+          <div className="comprehension-score">
+            <h4>📚 Comprehension Score</h4>
+            <div className="comprehension-percentage">
+              {comprehensionScore.percentage}%
+            </div>
+            <p>You got {comprehensionScore.score} out of {comprehensionScore.total} questions correct!</p>
+            <div className="score-breakdown">
+              <div className="breakdown-item">
+                <div className="breakdown-label">Literal</div>
+                <div className="breakdown-value literal">{comprehensionScore.breakdown?.literal || 0}%</div>
+              </div>
+              <div className="breakdown-item">
+                <div className="breakdown-label">Inferential</div>
+                <div className="breakdown-value inferential">{comprehensionScore.breakdown?.inferential || 0}%</div>
+              </div>
+              <div className="breakdown-item">
+                <div className="breakdown-label">Vocabulary</div>
+                <div className="breakdown-value vocabulary">{comprehensionScore.breakdown?.vocabulary || 0}%</div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

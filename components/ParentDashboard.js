@@ -9,6 +9,16 @@ function formatTime(totalSeconds) {
   return `${hours}h ${mins}m`;
 }
 
+// Helper function to convert file to base64
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = error => reject(error);
+  });
+}
+
 export default function ParentDashboard({
   child,
   themes,
@@ -24,7 +34,28 @@ export default function ParentDashboard({
   speechEngine,
 }) {
   const [newTheme, setNewTheme] = useState('');
+  const [uploadingThemeId, setUploadingThemeId] = useState(null);
   const sortedThemes = sortThemes(themes);
+  
+  const handleImageUpload = async (themeId, file) => {
+    if (!file) return;
+    
+    // Limit file size to 1MB to avoid localStorage issues
+    if (file.size > 1024 * 1024) {
+      alert('Image too large! Please choose an image under 1MB.');
+      return;
+    }
+    
+    setUploadingThemeId(themeId);
+    try {
+      const base64Image = await fileToBase64(file);
+      onUpdateTheme(themeId, { customBackground: base64Image });
+    } catch (error) {
+      alert('Failed to upload image. Please try again.');
+    } finally {
+      setUploadingThemeId(null);
+    }
+  };
   const stats = useMemo(() => {
     if (!readingSessions.length) {
       return {
