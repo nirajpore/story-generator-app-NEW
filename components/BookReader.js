@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState, useEffect } from 'react';
 import { analyzeReading, mergeDifficultWords, validateComprehensionQuestions } from '@/lib/readingAnalysis';
 import { storyTextFromPages } from '@/lib/storyUtils';
 import { createSpeechService } from '@/lib/speech/factory';
@@ -29,6 +29,19 @@ export default function BookReader({
   
   // For testing: Always show comprehension if we have at least 1 valid question
   const hasQuestions = validatedQuestions.length > 0;
+  
+  // Add/remove body class when comprehension modal opens/closes
+  useEffect(() => {
+    if (showComprehension) {
+      document.body.classList.add('comprehension-modal-open');
+    } else {
+      document.body.classList.remove('comprehension-modal-open');
+    }
+    
+    return () => {
+      document.body.classList.remove('comprehension-modal-open');
+    };
+  }, [showComprehension]);
   const [currentPage, setCurrentPage] = useState(0);
   const [reading, setReading] = useState(false);
   const [seconds, setSeconds] = useState(0);
@@ -193,23 +206,38 @@ export default function BookReader({
           </>
         ) : null}
 
-        {/* Comprehension Panel */}
+        {/* Comprehension Modal/Overlay */}
         {showComprehension && hasQuestions && (
-          <div className="comprehension-container">
-            <ComprehensionPanel
-              questions={validatedQuestions}
-              onComplete={(comprehensionResult) => {
-                setComprehensionScore(comprehensionResult);
-                // Store comprehension results with reading results
-                if (onComplete && result) {
-                  onComplete({
-                    ...result,
-                    comprehension: comprehensionResult
-                  });
-                }
-              }}
-              onSkip={() => setShowComprehension(false)}
-            />
+          <div className="comprehension-modal-overlay">
+            <div className="comprehension-modal">
+              <div className="comprehension-modal-header">
+                <button 
+                  className="comprehension-back-btn"
+                  onClick={() => setShowComprehension(false)}
+                >
+                  ← Back to Results
+                </button>
+                <h2>📚 Story Check</h2>
+                <div className="comprehension-modal-subtitle">
+                  Let&apos;s see what you remember from the story!
+                </div>
+              </div>
+              <ComprehensionPanel
+                questions={validatedQuestions}
+                onComplete={(comprehensionResult) => {
+                  setComprehensionScore(comprehensionResult);
+                  setShowComprehension(false);
+                  // Store comprehension results with reading results
+                  if (onComplete && result) {
+                    onComplete({
+                      ...result,
+                      comprehension: comprehensionResult
+                    });
+                  }
+                }}
+                onSkip={() => setShowComprehension(false)}
+              />
+            </div>
           </div>
         )}
 
