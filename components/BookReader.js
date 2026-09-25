@@ -20,15 +20,14 @@ export default function BookReader({
   onClose,
   onComplete,
 }) {
-  console.log('BookReader story:', story);
-  console.log('Comprehension questions:', story?.comprehensionQuestions);
+  // Safe access to story data
+  const safeStory = story || {};
   
   // Debug: Validate and log comprehension questions
-  const validatedQuestions = validateComprehensionQuestions(story?.comprehensionQuestions);
-  console.log('Validated questions count:', validatedQuestions.length);
+  const validatedQuestions = validateComprehensionQuestions(safeStory?.comprehensionQuestions);
   
-  // For testing: Always show comprehension if we have at least 1 valid question
-  const hasQuestions = validatedQuestions.length > 0;
+  // Only show comprehension if we have a story AND validated questions
+  const hasQuestions = safeStory && Object.keys(safeStory).length > 0 && validatedQuestions.length > 0;
   
   // Add/remove body class when comprehension modal opens/closes
   useEffect(() => {
