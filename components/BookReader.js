@@ -32,14 +32,18 @@ export default function BookReader({
   
   // Add/remove body class when comprehension modal opens/closes
   useEffect(() => {
-    if (showComprehension) {
-      document.body.classList.add('comprehension-modal-open');
-    } else {
-      document.body.classList.remove('comprehension-modal-open');
+    if (typeof document !== 'undefined') {
+      if (showComprehension) {
+        document.body.classList.add('comprehension-modal-open');
+      } else {
+        document.body.classList.remove('comprehension-modal-open');
+      }
     }
     
     return () => {
-      document.body.classList.remove('comprehension-modal-open');
+      if (typeof document !== 'undefined') {
+        document.body.classList.remove('comprehension-modal-open');
+      }
     };
   }, [showComprehension]);
   const [currentPage, setCurrentPage] = useState(0);
