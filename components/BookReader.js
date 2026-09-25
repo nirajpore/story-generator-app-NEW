@@ -224,49 +224,18 @@ export default function BookReader({
                   Let&apos;s see what you remember from the story!
                 </div>
               </div>
-              <ComprehensionPanel
-                questions={validatedQuestions}
-                onComplete={(comprehensionResult) => {
-                  setComprehensionScore(comprehensionResult);
-                  setShowComprehension(false);
-                  // Store comprehension results with reading results
-                  if (onComplete && result) {
-                    onComplete({
-                      ...result,
-                      comprehension: comprehensionResult
-                    });
-                  }
-                }}
-                onSkip={() => setShowComprehension(false)}
-              />
+              {/* Comprehension panel temporarily disabled - will fix tomorrow */}
+              <div style={{padding: '20px', textAlign: 'center', color: '#666'}}>
+                <p>Comprehension questions coming soon!</p>
+                <button onClick={() => setShowComprehension(false)}>
+                  Continue
+                </button>
+              </div>
             </div>
           </div>
         )}
 
-        {/* Show Comprehension Score */}
-        {comprehensionScore && !showComprehension && (
-          <div className="comprehension-score">
-            <h4>📚 Comprehension Score</h4>
-            <div className="comprehension-percentage">
-              {comprehensionScore.percentage}%
-            </div>
-            <p>You got {comprehensionScore.score} out of {comprehensionScore.total} questions correct!</p>
-            <div className="score-breakdown">
-              <div className="breakdown-item">
-                <div className="breakdown-label">Literal</div>
-                <div className="breakdown-value literal">{comprehensionScore.breakdown?.literal || 0}%</div>
-              </div>
-              <div className="breakdown-item">
-                <div className="breakdown-label">Inferential</div>
-                <div className="breakdown-value inferential">{comprehensionScore.breakdown?.inferential || 0}%</div>
-              </div>
-              <div className="breakdown-item">
-                <div className="breakdown-label">Vocabulary</div>
-                <div className="breakdown-value vocabulary">{comprehensionScore.breakdown?.vocabulary || 0}%</div>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Comprehension score display temporarily disabled */}
       </div>
     </div>
   );
