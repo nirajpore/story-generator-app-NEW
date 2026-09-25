@@ -1,7 +1,7 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
-import { analyzeReading, mergeDifficultWords } from '@/lib/readingAnalysis';
+import { useMemo, useRef, useState, useEffect } from 'react';
+import { analyzeReading, mergeDifficultWords, validateComprehensionQuestions } from '@/lib/readingAnalysis';
 import { storyTextFromPages } from '@/lib/storyUtils';
 import { createSpeechService } from '@/lib/speech/factory';
 import { getStoryBackground } from '@/lib/backgroundUtils';
